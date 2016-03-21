@@ -17,12 +17,12 @@
 
 <io.plaidapp.ui.widget.FourThreeLinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/product_hunt"
     android:foreground="@drawable/dark_ripple"
     android:orientation="vertical"
+    android:elevation="@dimen/z_card"
     android:stateListAnimator="@animator/raise">
 
     <io.plaidapp.ui.widget.BaselineGridTextView
@@ -30,7 +30,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingStart="@dimen/padding_normal"
-        app:topPaddingHint="@dimen/padding_normal"
+        android:paddingTop="@dimen/padding_normal"
         android:paddingEnd="@dimen/padding_normal"
         android:paddingBottom="@dimen/spacing_micro"
         android:ellipsize="end"
@@ -49,7 +49,7 @@
         android:breakStrategy="simple"
         style="@style/Widget.Plaid.TileSecondary" />
 
-    <TextView
+    <io.plaidapp.ui.widget.BaselineGridTextView
         android:id="@+id/story_comments"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

@@ -33,11 +33,13 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Matrix;
 import android.graphics.RectF;
+import android.graphics.drawable.AnimatedVectorDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Parcelable;
 import android.support.customtabs.CustomTabsIntent;
+import android.support.design.widget.Snackbar;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.graphics.Palette;
 import android.text.Spanned;
@@ -47,12 +49,12 @@ import android.transition.AutoTransition;
 import android.transition.Transition;
 import android.transition.TransitionManager;
 import android.util.Log;
+import android.util.Pair;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
-import android.view.animation.AnimationUtils;
 import android.view.animation.Interpolator;
 import android.widget.AbsListView;
 import android.widget.ArrayAdapter;
@@ -73,16 +75,14 @@ import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.bumptech.glide.load.resource.drawable.GlideDrawable;
 import com.bumptech.glide.request.RequestListener;
 import com.bumptech.glide.request.target.Target;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 
 import java.text.NumberFormat;
 import java.util.List;
 
 import butterknife.Bind;
+import butterknife.BindDimen;
 import butterknife.ButterKnife;
 import io.plaidapp.R;
-import io.plaidapp.data.api.AuthInterceptor;
 import io.plaidapp.data.api.dribbble.DribbbleService;
 import io.plaidapp.data.api.dribbble.model.Comment;
 import io.plaidapp.data.api.dribbble.model.Like;
@@ -104,14 +104,17 @@ import io.plaidapp.util.ViewUtils;
 import io.plaidapp.util.customtabs.CustomTabActivityHelper;
 import io.plaidapp.util.glide.CircleTransform;
 import io.plaidapp.util.glide.GlideUtils;
-import retrofit.RestAdapter;
-import retrofit.RetrofitError;
-import retrofit.client.Response;
-import retrofit.converter.GsonConverter;
+import okhttp3.HttpUrl;
+import retrofit2.Call;
+import retrofit2.Callback;
+import retrofit2.Response;
+
+import static io.plaidapp.util.AnimUtils.getFastOutSlowInInterpolator;
+import static io.plaidapp.util.AnimUtils.getLinearOutSlowInInterpolator;
 
 public class DribbbleShot extends Activity {
 
-    protected final static String EXTRA_SHOT = "shot";
+    public final static String EXTRA_SHOT = "EXTRA_SHOT";
     private static final int RC_LOGIN_LIKE = 0;
     private static final int RC_LOGIN_COMMENT = 1;
     private static final float SCRIM_ADJUSTMENT = 0.075f;
@@ -140,22 +143,21 @@ public class DribbbleShot extends Activity {
     private Shot shot;
     private int fabOffset;
     private DribbblePrefs dribbblePrefs;
-    private DribbbleService dribbbleApi;
     private boolean performingLike;
     private boolean allowComment;
     private CircleTransform circleTransform;
     private ElasticDragDismissFrameLayout.SystemChromeFader chromeFader;
+    @BindDimen(R.dimen.large_avatar_size) int largeAvatarSize;
+    @BindDimen(R.dimen.z_card) int cardElevation;
 
     @Override
     protected void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_dribbble_shot);
-        shot = getIntent().getParcelableExtra(EXTRA_SHOT);
-        setupDribbble();
+        dribbblePrefs = DribbblePrefs.get(this);
         setExitSharedElementCallback(fabLoginSharedElementCallback);
         getWindow().getSharedElementReturnTransition().addListener(shotReturnHomeListener);
         circleTransform = new CircleTransform(this);
-        Resources res = getResources();
 
         ButterKnife.bind(this);
         View shotDescription = getLayoutInflater().inflate(R.layout.dribbble_shot_description,
@@ -181,100 +183,43 @@ public class DribbbleShot extends Activity {
             }
         });
         fab.setOnClickListener(fabClick);
-        chromeFader = new ElasticDragDismissFrameLayout.SystemChromeFader(getWindow()) {
+        chromeFader = new ElasticDragDismissFrameLayout.SystemChromeFader(this) {
             @Override
             public void onDragDismissed() {
                 expandImageAndFinish();
             }
         };
 
-        // load the main image
-        final int[] imageSize = shot.images.bestSize();
-        Glide.with(this)
-                .load(shot.images.best())
-                .listener(shotLoadListener)
-                .diskCacheStrategy(DiskCacheStrategy.SOURCE)
-                .priority(Priority.IMMEDIATE)
-                .override(imageSize[0], imageSize[1])
-                .into(imageView);
-        imageView.setOnClickListener(shotClick);
-        shotSpacer.setOnClickListener(shotClick);
+        final Intent intent = getIntent();
+        if (intent.hasExtra(EXTRA_SHOT)) {
+            shot = intent.getParcelableExtra(EXTRA_SHOT);
+            bindShot(true, savedInstanceState != null);
+        } else if (intent.getData() != null) {
+            final HttpUrl url = HttpUrl.parse(intent.getDataString());
+            if (url.pathSize() == 2 && url.pathSegments().get(0).equals("shots")) {
+                try {
+                    final String shotPath = url.pathSegments().get(1);
+                    final long id = Long.parseLong(shotPath.substring(0, shotPath.indexOf("-")));
 
-        postponeEnterTransition();
-        imageView.getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver
-                .OnPreDrawListener() {
-            @Override
-            public boolean onPreDraw() {
-                imageView.getViewTreeObserver().removeOnPreDrawListener(this);
-                calculateFabPosition();
-                enterAnimation(savedInstanceState != null);
-                startPostponedEnterTransition();
-                return true;
-            }
-        });
+                    final Call<Shot> shotCall = dribbblePrefs.getApi().getShot(id);
+                    shotCall.enqueue(new Callback<Shot>() {
+                        @Override
+                        public void onResponse(Call<Shot> call, Response<Shot> response) {
+                            shot = response.body();
+                            bindShot(false, true);
+                        }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            ((FabOverlapTextView) title).setText(shot.title);
-        } else {
-            ((TextView) title).setText(shot.title);
-        }
-        if (!TextUtils.isEmpty(shot.description)) {
-            final Spanned descText = shot.getParsedDescription(
-                    ContextCompat.getColorStateList(this, R.color.dribbble_links),
-                    ContextCompat.getColor(this, R.color.dribbble_link_highlight));
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                ((FabOverlapTextView) description).setText(descText);
-            } else {
-                HtmlUtils.setTextWithNiceLinks((TextView) description, descText);
-            }
-        } else {
-            description.setVisibility(View.GONE);
-        }
-        NumberFormat nf = NumberFormat.getInstance();
-        likeCount.setText(
-                res.getQuantityString(R.plurals.likes,
-                        (int) shot.likes_count,
-                        nf.format(shot.likes_count)));
-        // TODO onClick show likes
-        viewCount.setText(
-                res.getQuantityString(R.plurals.views,
-                        (int) shot.views_count,
-                        nf.format(shot.views_count)));
-        share.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                new ShareDribbbleImageTask(DribbbleShot.this, shot).execute();
-            }
-        });
-        if (shot.user != null) {
-            playerName.setText("–" + shot.user.name);
-            Glide.with(this)
-                    .load(shot.user.avatar_url)
-                    .transform(circleTransform)
-                    .placeholder(R.drawable.avatar_placeholder)
-                    .into(playerAvatar);
-            playerAvatar.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    DribbbleShot.this.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(shot
-                            .user.html_url)));
+                        @Override
+                        public void onFailure(Call<Shot> call, Throwable t) {
+                            reportUrlError();
+                        }
+                    });
+                } catch (NumberFormatException|StringIndexOutOfBoundsException ex) {
+                    reportUrlError();
                 }
-            });
-            if (shot.created_at != null) {
-                shotTimeAgo.setText(DateUtils.getRelativeTimeSpanString(shot.created_at.getTime(),
-                        System.currentTimeMillis(),
-                        DateUtils.SECOND_IN_MILLIS));
+            } else {
+                reportUrlError();
             }
-        } else {
-            playerName.setVisibility(View.GONE);
-            playerAvatar.setVisibility(View.GONE);
-            shotTimeAgo.setVisibility(View.GONE);
-        }
-
-        if (shot.comments_count > 0) {
-            loadComments();
-        } else {
-            commentsList.setAdapter(getNoCommentsAdapter());
         }
     }
 
@@ -298,7 +243,6 @@ public class DribbbleShot extends Activity {
         switch (requestCode) {
             case RC_LOGIN_LIKE:
                 if (resultCode == RESULT_OK) {
-                    setupDribbble(); // recreate to capture the new access token
                     // TODO when we add more authenticated actions will need to keep track of what
                     // the user was trying to do when forced to login
                     fab.setChecked(true);
@@ -327,6 +271,142 @@ public class DribbbleShot extends Activity {
     @Override @TargetApi(Build.VERSION_CODES.M)
     public void onProvideAssistContent(AssistContent outContent) {
         outContent.setWebUri(Uri.parse(shot.url));
+    }
+
+    private void bindShot(final boolean postponeEnterTransition, final boolean animateFabManually) {
+        final Resources res = getResources();
+
+        // load the main image
+        final int[] imageSize = shot.images.bestSize();
+        Glide.with(this)
+                .load(shot.images.best())
+                .listener(shotLoadListener)
+                .diskCacheStrategy(DiskCacheStrategy.SOURCE)
+                .priority(Priority.IMMEDIATE)
+                .override(imageSize[0], imageSize[1])
+                .into(imageView);
+        imageView.setOnClickListener(shotClick);
+        shotSpacer.setOnClickListener(shotClick);
+
+        if (postponeEnterTransition) postponeEnterTransition();
+        imageView.getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver
+                .OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                imageView.getViewTreeObserver().removeOnPreDrawListener(this);
+                calculateFabPosition();
+                enterAnimation(animateFabManually);
+                if (postponeEnterTransition) startPostponedEnterTransition();
+                return true;
+            }
+        });
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            ((FabOverlapTextView) title).setText(shot.title);
+        } else {
+            ((TextView) title).setText(shot.title);
+        }
+        if (!TextUtils.isEmpty(shot.description)) {
+            final Spanned descText = shot.getParsedDescription(
+                    ContextCompat.getColorStateList(this, R.color.dribbble_links),
+                    ContextCompat.getColor(this, R.color.dribbble_link_highlight));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                ((FabOverlapTextView) description).setText(descText);
+            } else {
+                HtmlUtils.setTextWithNiceLinks((TextView) description, descText);
+            }
+        } else {
+            description.setVisibility(View.GONE);
+        }
+        NumberFormat nf = NumberFormat.getInstance();
+        likeCount.setText(
+                res.getQuantityString(R.plurals.likes,
+                        (int) shot.likes_count,
+                        nf.format(shot.likes_count)));
+        likeCount.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ((AnimatedVectorDrawable) likeCount.getCompoundDrawables()[1]).start();
+                if (shot.likes_count > 0) {
+                    PlayerSheet.start(DribbbleShot.this, shot);
+                }
+            }
+        });
+        if (shot.likes_count == 0) {
+            likeCount.setBackground(null); // clear touch ripple if doesn't do anything
+        }
+        viewCount.setText(
+                res.getQuantityString(R.plurals.views,
+                        (int) shot.views_count,
+                        nf.format(shot.views_count)));
+        viewCount.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ((AnimatedVectorDrawable) viewCount.getCompoundDrawables()[1]).start();
+            }
+        });
+        share.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ((AnimatedVectorDrawable) share.getCompoundDrawables()[1]).start();
+                new ShareDribbbleImageTask(DribbbleShot.this, shot).execute();
+            }
+        });
+        if (shot.user != null) {
+            playerName.setText("–" + shot.user.name);
+            Glide.with(this)
+                    .load(shot.user.getHighQualityAvatarUrl())
+                    .transform(circleTransform)
+                    .placeholder(R.drawable.avatar_placeholder)
+                    .override(largeAvatarSize, largeAvatarSize)
+                    .into(playerAvatar);
+            View.OnClickListener playerClick = new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    Intent player = new Intent(DribbbleShot.this, PlayerActivity.class);
+                    if (shot.user.shots_count > 0) { // legit user object
+                        player.putExtra(PlayerActivity.EXTRA_PLAYER, shot.user);
+                    } else {
+                        // search doesn't fully populate the user object,
+                        // in this case send the ID not the full user
+                        player.putExtra(PlayerActivity.EXTRA_PLAYER_NAME, shot.user.username);
+                        player.putExtra(PlayerActivity.EXTRA_PLAYER_ID, shot.user.id);
+                    }
+                    ActivityOptions options =
+                            ActivityOptions.makeSceneTransitionAnimation(DribbbleShot.this,
+                                    playerAvatar, getString(R.string.transition_player_avatar));
+                    startActivity(player, options.toBundle());
+                }
+            };
+            playerAvatar.setOnClickListener(playerClick);
+            playerName.setOnClickListener(playerClick);
+            if (shot.created_at != null) {
+                shotTimeAgo.setText(DateUtils.getRelativeTimeSpanString(shot.created_at.getTime(),
+                        System.currentTimeMillis(),
+                        DateUtils.SECOND_IN_MILLIS));
+            }
+        } else {
+            playerName.setVisibility(View.GONE);
+            playerAvatar.setVisibility(View.GONE);
+            shotTimeAgo.setVisibility(View.GONE);
+        }
+
+        if (shot.comments_count > 0) {
+            loadComments();
+        } else {
+            commentsList.setAdapter(getNoCommentsAdapter());
+        }
+        checkLiked();
+    }
+
+    private void reportUrlError() {
+        Snackbar.make(draggableFrame, R.string.bad_dribbble_shot_url, Snackbar.LENGTH_SHORT).show();
+        draggableFrame.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                finishAfterTransition();
+            }
+        }, 3000L);
     }
 
     private void setupCommenting() {
@@ -370,6 +450,7 @@ public class DribbbleShot extends Activity {
                 DribbbleShot.this,
                 new CustomTabsIntent.Builder()
                     .setToolbarColor(ContextCompat.getColor(DribbbleShot.this, R.color.dribbble))
+                    .addDefaultShareMenuItem()
                     .build(),
                 Uri.parse(url));
     }
@@ -380,14 +461,14 @@ public class DribbbleShot extends Activity {
                                        Target<GlideDrawable> target, boolean isFromMemoryCache,
                                        boolean isFirstResource) {
             final Bitmap bitmap = GlideUtils.getBitmap(resource);
-            float imageScale = (float) imageView.getHeight() / (float) bitmap.getHeight();
-            float twentyFourDip = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 24,
-                    DribbbleShot.this.getResources().getDisplayMetrics());
+            final int twentyFourDip = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP,
+                    24, DribbbleShot.this.getResources().getDisplayMetrics());
             Palette.from(bitmap)
                     .maximumColorCount(3)
-                    .clearFilters()
-                    .setRegion(0, 0, bitmap.getWidth() - 1, (int) (twentyFourDip / imageScale))
-                    // - 1 to work around https://code.google.com/p/android/issues/detail?id=191013
+                    .clearFilters() /* by default palette ignore certain hues
+                        (e.g. pure black/white) but we don't want this. */
+                    .setRegion(0, 0, bitmap.getWidth() - 1, twentyFourDip) /* - 1 to work around
+                        https://code.google.com/p/android/issues/detail?id=191013 */
                     .generate(new Palette.PaletteAsyncListener() {
                         @Override
                         public void onGenerated(Palette palette) {
@@ -407,7 +488,8 @@ public class DribbbleShot extends Activity {
                             // color the status bar. Set a complementary dark color on L,
                             // light or dark color on M (with matching status bar icons)
                             int statusBarColor = getWindow().getStatusBarColor();
-                            Palette.Swatch topColor = ColorUtils.getMostPopulousSwatch(palette);
+                            final Palette.Swatch topColor =
+                                    ColorUtils.getMostPopulousSwatch(palette);
                             if (topColor != null &&
                                     (isDark || Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)) {
                                 statusBarColor = ColorUtils.scrimify(topColor.getRgb(),
@@ -420,28 +502,26 @@ public class DribbbleShot extends Activity {
 
                             if (statusBarColor != getWindow().getStatusBarColor()) {
                                 imageView.setScrimColor(statusBarColor);
-                                ValueAnimator statusBarColorAnim = ValueAnimator.ofArgb(getWindow
-                                        ().getStatusBarColor(), statusBarColor);
+                                ValueAnimator statusBarColorAnim = ValueAnimator.ofArgb(
+                                        getWindow().getStatusBarColor(), statusBarColor);
                                 statusBarColorAnim.addUpdateListener(new ValueAnimator
                                         .AnimatorUpdateListener() {
                                     @Override
                                     public void onAnimationUpdate(ValueAnimator animation) {
-                                        getWindow().setStatusBarColor((int) animation
-                                                .getAnimatedValue());
+                                        getWindow().setStatusBarColor(
+                                                (int) animation.getAnimatedValue());
                                     }
                                 });
-                                statusBarColorAnim.setDuration(1000);
-                                statusBarColorAnim.setInterpolator(AnimationUtils
-                                        .loadInterpolator(DribbbleShot.this, android.R
-                                                .interpolator.fast_out_slow_in));
+                                statusBarColorAnim.setDuration(1000L);
+                                statusBarColorAnim.setInterpolator(
+                                        getFastOutSlowInInterpolator(DribbbleShot.this));
                                 statusBarColorAnim.start();
                             }
                         }
                     });
 
             Palette.from(bitmap)
-                    .clearFilters() // by default palette ignore certain hues (e.g. pure
-                            // black/white) but we don't want this.
+                    .clearFilters()
                     .generate(new Palette.PaletteAsyncListener() {
                         @Override
                         public void onGenerated(Palette palette) {
@@ -473,7 +553,7 @@ public class DribbbleShot extends Activity {
         @Override
         public void onFocusChange(View view, boolean hasFocus) {
             // kick off an anim (via animated state list) on the post button. see
-            // @drawable/ic_add_comment_state
+            // @drawable/ic_add_comment
             postComment.setActivated(hasFocus);
         }
     };
@@ -485,7 +565,7 @@ public class DribbbleShot extends Activity {
             if (commentsList.getMaxScrollAmount() > 0
                     && firstVisibleItemPosition == 0
                     && commentsList.getChildAt(0) != null) {
-                int listScroll = commentsList.getChildAt(0).getTop();
+                final int listScroll = commentsList.getChildAt(0).getTop();
                 imageView.setOffset(listScroll);
                 fab.setOffset(fabOffset + listScroll);
             }
@@ -495,8 +575,8 @@ public class DribbbleShot extends Activity {
             // as we animate the main image's elevation change when it 'pins' at it's min height
             // a fling can cause the title to go over the image before the animation has a chance to
             // run. In this case we short circuit the animation and just jump to state.
-            imageView.setImmediatePin(scrollState == AbsListView.OnScrollListener
-                    .SCROLL_STATE_FLING);
+            imageView.setImmediatePin(
+                    scrollState == AbsListView.OnScrollListener.SCROLL_STATE_FLING);
         }
     };
 
@@ -507,7 +587,7 @@ public class DribbbleShot extends Activity {
                 fab.toggle();
                 doLike();
             } else {
-                Intent login = new Intent(DribbbleShot.this, DribbbleLogin.class);
+                final Intent login = new Intent(DribbbleShot.this, DribbbleLogin.class);
                 login.putExtra(FabDialogMorphSetup.EXTRA_SHARED_ELEMENT_START_COLOR,
                         ContextCompat.getColor(DribbbleShot.this, R.color.dribbble));
                 ActivityOptions options = ActivityOptions.makeSceneTransitionAnimation
@@ -546,15 +626,13 @@ public class DribbbleShot extends Activity {
             back.animate()
                     .alpha(0f)
                     .setDuration(100)
-                    .setInterpolator(AnimationUtils.loadInterpolator(DribbbleShot.this, android.R
-                            .interpolator.linear_out_slow_in));
+                    .setInterpolator(getLinearOutSlowInInterpolator(DribbbleShot.this));
             imageView.setElevation(1f);
             back.setElevation(0f);
             commentsList.animate()
                     .alpha(0f)
                     .setDuration(50)
-                    .setInterpolator(AnimationUtils.loadInterpolator(DribbbleShot.this, android.R
-                            .interpolator.linear_out_slow_in));
+                    .setInterpolator(getLinearOutSlowInInterpolator(DribbbleShot.this));
         }
     };
 
@@ -562,13 +640,15 @@ public class DribbbleShot extends Activity {
         commentsList.setAdapter(getLoadingCommentsAdapter());
 
         // then load comments
-        dribbbleApi.getComments(shot.id, null, DribbbleService.PER_PAGE_MAX, new retrofit
-                .Callback<List<Comment>>() {
+        final Call<List<Comment>> commentsCall =
+                dribbblePrefs.getApi().getComments(shot.id, 0, DribbbleService.PER_PAGE_MAX);
+        commentsCall.enqueue(new Callback<List<Comment>>() {
             @Override
-            public void success(List<Comment> comments, Response response) {
+            public void onResponse(Call<List<Comment>> call, Response<List<Comment>> response) {
+                final List<Comment> comments = response.body();
                 if (comments != null && !comments.isEmpty()) {
-                    commentsAdapter = new DribbbleCommentsAdapter(DribbbleShot.this, R.layout
-                            .dribbble_comment, comments);
+                    commentsAdapter = new DribbbleCommentsAdapter(
+                            DribbbleShot.this, R.layout.dribbble_comment, comments);
                     commentsList.setAdapter(commentsAdapter);
                     commentsList.setDivider(getDrawable(R.drawable.list_divider));
                     commentsList.setDividerHeight(getResources().getDimensionPixelSize(R.dimen
@@ -576,9 +656,7 @@ public class DribbbleShot extends Activity {
                 }
             }
 
-            @Override
-            public void failure(RetrofitError error) {
-            }
+            @Override public void onFailure(Call<List<Comment>> call, Throwable t) { }
         });
     }
 
@@ -587,8 +665,7 @@ public class DribbbleShot extends Activity {
             Animator expandImage = ObjectAnimator.ofFloat(imageView, ParallaxScrimageView.OFFSET,
                     0f);
             expandImage.setDuration(80);
-            expandImage.setInterpolator(AnimationUtils.loadInterpolator(this, android.R
-                    .interpolator.fast_out_slow_in));
+            expandImage.setInterpolator(getFastOutSlowInInterpolator(this));
             expandImage.addListener(new AnimatorListenerAdapter() {
                 @Override
                 public void onAnimationEnd(Animator animation) {
@@ -599,20 +676,6 @@ public class DribbbleShot extends Activity {
         } else {
             finishAfterTransition();
         }
-    }
-
-    private void setupDribbble() {
-        // setup the api object which captures the current access token
-        dribbblePrefs = DribbblePrefs.get(this);
-        Gson gson = new GsonBuilder()
-                .setDateFormat(DribbbleService.DATE_FORMAT)
-                .create();
-        RestAdapter restAdapter = new RestAdapter.Builder()
-                .setEndpoint(DribbbleService.ENDPOINT)
-                .setConverter(new GsonConverter(gson))
-                .setRequestInterceptor(new AuthInterceptor(dribbblePrefs.getAccessToken()))
-                .build();
-        dribbbleApi = restAdapter.create(DribbbleService.class);
     }
 
     private void calculateFabPosition() {
@@ -629,9 +692,8 @@ public class DribbbleShot extends Activity {
      * are within the ListView so do it manually.  Also handle the FAB tanslation here so that it
      * plays nicely with #calculateFabPosition
      */
-    private void enterAnimation(boolean isOrientationChange) {
-        Interpolator interp = AnimationUtils.loadInterpolator(this, android.R.interpolator
-                .fast_out_slow_in);
+    private void enterAnimation(boolean animateFabManually) {
+        Interpolator interp = getFastOutSlowInInterpolator(this);
         int offset = title.getHeight();
         viewEnterAnimation(title, offset, interp);
         if (description.getVisibility() == View.VISIBLE) {
@@ -659,7 +721,7 @@ public class DribbbleShot extends Activity {
                 .setInterpolator(interp)
                 .start();
 
-        if (isOrientationChange) {
+        if (animateFabManually) {
             // we rely on the window enter content transition to show the fab. This isn't run on
             // orientation changes so manually show it.
             Animator showFab = ObjectAnimator.ofPropertyValuesHolder(fab,
@@ -668,8 +730,7 @@ public class DribbbleShot extends Activity {
                     PropertyValuesHolder.ofFloat(View.SCALE_Y, 0f, 1f));
             showFab.setStartDelay(300L);
             showFab.setDuration(300L);
-            showFab.setInterpolator(AnimationUtils.loadInterpolator(this,
-                    android.R.interpolator.linear_out_slow_in));
+            showFab.setInterpolator(getLinearOutSlowInInterpolator(this));
             showFab.start();
         }
     }
@@ -689,26 +750,28 @@ public class DribbbleShot extends Activity {
     private void doLike() {
         performingLike = true;
         if (fab.isChecked()) {
-            dribbbleApi.like(shot.id, "", new retrofit.Callback<Like>() {
+            final Call<Like> likeCall = dribbblePrefs.getApi().like(shot.id);
+            likeCall.enqueue(new Callback<Like>() {
                 @Override
-                public void success(Like like, Response response) {
+                public void onResponse(Call<Like> call, Response<Like> response) {
                     performingLike = false;
                 }
 
                 @Override
-                public void failure(RetrofitError error) {
+                public void onFailure(Call<Like> call, Throwable t) {
                     performingLike = false;
                 }
             });
         } else {
-            dribbbleApi.unlike(shot.id, new retrofit.Callback<Void>() {
+            final Call<Void> unlikeCall = dribbblePrefs.getApi().unlike(shot.id);
+            unlikeCall.enqueue(new Callback<Void>() {
                 @Override
-                public void success(Void aVoid, Response response) {
+                public void onResponse(Call<Void> call, Response<Void> response) {
                     performingLike = false;
                 }
 
                 @Override
-                public void failure(RetrofitError error) {
+                public void onFailure(Call<Void> call, Throwable t) {
                     performingLike = false;
                 }
             });
@@ -716,17 +779,18 @@ public class DribbbleShot extends Activity {
     }
 
     private void checkLiked() {
-        if (dribbblePrefs.isLoggedIn()) {
-            dribbbleApi.liked(shot.id, new retrofit.Callback<Like>() {
+        if (shot != null && dribbblePrefs.isLoggedIn()) {
+            final Call<Like> likedCall = dribbblePrefs.getApi().liked(shot.id);
+            likedCall.enqueue(new Callback<Like>() {
                 @Override
-                public void success(Like like, Response response) {
+                public void onResponse(Call<Like> call, Response<Like> response) {
                     // note that like.user will be null here
-                    fab.setChecked(like != null);
+                    fab.setChecked(response.body() != null);
                     fab.jumpDrawablesToCurrentState();
                 }
 
                 @Override
-                public void failure(RetrofitError error) {
+                public void onFailure(Call<Like> call, Throwable t) {
                     // 404 is expected if shot is not liked
                     fab.setChecked(false);
                     fab.jumpDrawablesToCurrentState();
@@ -739,17 +803,18 @@ public class DribbbleShot extends Activity {
         if (dribbblePrefs.isLoggedIn()) {
             if (TextUtils.isEmpty(enterComment.getText())) return;
             enterComment.setEnabled(false);
-            dribbbleApi.postComment(shot.id, enterComment.getText().toString().trim(), new retrofit
-                    .Callback<Comment>() {
+            final Call<Comment> postCommentCall =
+                    dribbblePrefs.getApi().postComment(shot.id, enterComment.getText().toString().trim());
+            postCommentCall.enqueue(new Callback<Comment>() {
                 @Override
-                public void success(Comment comment, Response response) {
+                public void onResponse(Call<Comment> call, Response<Comment> response) {
                     loadComments();
                     enterComment.getText().clear();
                     enterComment.setEnabled(true);
                 }
 
                 @Override
-                public void failure(RetrofitError error) {
+                public void onFailure(Call<Comment> call, Throwable t) {
                     enterComment.setEnabled(true);
                 }
             });
@@ -809,8 +874,7 @@ public class DribbbleShot extends Activity {
             inflater = LayoutInflater.from(context);
             change = new AutoTransition();
             change.setDuration(200L);
-            change.setInterpolator(AnimationUtils.loadInterpolator(context,
-                    android.R.interpolator.fast_out_slow_in));
+            change.setInterpolator(getFastOutSlowInInterpolator(context));
         }
 
         @Override
@@ -845,15 +909,23 @@ public class DribbbleShot extends Activity {
             final TextView likesCount = (TextView) view.getTag(R.id.comment_likes_count);
 
             Glide.with(DribbbleShot.this)
-                    .load(comment.user.avatar_url)
+                    .load(comment.user.getHighQualityAvatarUrl())
                     .transform(circleTransform)
                     .placeholder(R.drawable.avatar_placeholder)
+                    .override(largeAvatarSize, largeAvatarSize)
                     .into(avatar);
             avatar.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    DribbbleShot.this.startActivity(new Intent(Intent.ACTION_VIEW,
-                            Uri.parse(comment.user.html_url)));
+                    Intent player = new Intent(DribbbleShot.this, PlayerActivity.class);
+                    player.putExtra(PlayerActivity.EXTRA_PLAYER, comment.user);
+                    ActivityOptions options =
+                            ActivityOptions.makeSceneTransitionAnimation(DribbbleShot.this,
+                                    Pair.create(view,
+                                            getString(R.string.transition_player_background)),
+                                    Pair.create((View) avatar,
+                                            getString(R.string.transition_player_avatar)));
+                    startActivity(player, options.toBundle());
                 }
             });
             author.setText(comment.user.name);
@@ -873,25 +945,27 @@ public class DribbbleShot extends Activity {
                     view.setActivated(!isExpanded);
                     if (!isExpanded) { // do expand
                         expandedCommentPosition = position;
+
+                        // work around issue where avatar of selected comment not shown during
+                        // shared element transition (returning from player screen)
+                        avatar.setOutlineProvider(null);
+                        avatar.setElevation(cardElevation);
+
                         reply.setVisibility(View.VISIBLE);
                         likeHeart.setVisibility(View.VISIBLE);
                         likesCount.setVisibility(View.VISIBLE);
                         if (comment.liked == null) {
-                            dribbbleApi.likedComment(shot.id, comment.id,
-                                    new retrofit.Callback<Like>() {
+                            final Call<Like> liked = dribbblePrefs.getApi()
+                                    .likedComment(shot.id, comment.id);
+                            liked.enqueue(new Callback<Like>() {
                                 @Override
-                                public void success(Like like, Response response) {
-                                    comment.liked = true;
-                                    likeHeart.setChecked(true);
+                                public void onResponse(Call<Like> call, Response<Like> response) {
+                                    comment.liked = response.isSuccessful();
+                                    likeHeart.setChecked(comment.liked);
                                     likeHeart.jumpDrawablesToCurrentState();
                                 }
 
-                                @Override
-                                public void failure(RetrofitError error) {
-                                    comment.liked = false;
-                                    likeHeart.setChecked(false);
-                                    likeHeart.jumpDrawablesToCurrentState();
-                                }
+                                @Override public void onFailure(Call<Like> call, Throwable t) { }
                             });
                         }
                         if (enterComment != null && enterComment.hasFocus()) {
@@ -901,6 +975,8 @@ public class DribbbleShot extends Activity {
                         view.requestFocus();
                     } else { // do collapse
                         expandedCommentPosition = ListView.INVALID_POSITION;
+                        avatar.setOutlineProvider(ViewUtils.CIRCULAR_OUTLINE);
+                        avatar.setElevation(0f);
                         reply.setVisibility(View.GONE);
                         likeHeart.setVisibility(View.GONE);
                         likesCount.setVisibility(View.GONE);
@@ -937,26 +1013,30 @@ public class DribbbleShot extends Activity {
                                 comment.likes_count++;
                                 likesCount.setText(String.valueOf(comment.likes_count));
                                 notifyDataSetChanged();
-                                dribbbleApi.likeComment(shot.id, comment.id, "",
-                                        new retrofit.Callback<Like>() {
+                                final Call<Like> likeCommentCall =
+                                        dribbblePrefs.getApi().likeComment(shot.id, comment.id);
+                                likeCommentCall.enqueue(new Callback<Like>() {
                                     @Override
-                                    public void success(Like like, Response response) { }
+                                    public void onResponse(Call<Like> call,
+                                                           Response<Like> response) { }
 
                                     @Override
-                                    public void failure(RetrofitError error) { }
+                                    public void onFailure(Call<Like> call, Throwable t) { }
                                 });
                             } else {
                                 comment.liked = false;
                                 comment.likes_count--;
                                 likesCount.setText(String.valueOf(comment.likes_count));
                                 notifyDataSetChanged();
-                                dribbbleApi.unlikeComment(shot.id, comment.id,
-                                        new retrofit.Callback<Void>() {
+                                final Call<Void> unlikeCommentCall =
+                                        dribbblePrefs.getApi().unlikeComment(shot.id, comment.id);
+                                unlikeCommentCall.enqueue(new Callback<Void>() {
                                     @Override
-                                    public void success(Void voyd, Response response) { }
+                                    public void onResponse(Call<Void> call,
+                                                           Response<Void> response) { }
 
                                     @Override
-                                    public void failure(RetrofitError error) { }
+                                    public void onFailure(Call<Void> call, Throwable t) { }
                                 });
                             }
                         } else {
@@ -973,13 +1053,15 @@ public class DribbbleShot extends Activity {
             likesCount.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    dribbbleApi.getCommentLikes(shot.id, comment.id,
-                            new retrofit.Callback<List<Like>>() {
+                    final Call<List<Like>> commentLikesCall =
+                            dribbblePrefs.getApi().getCommentLikes(shot.id, comment.id);
+                    commentLikesCall.enqueue(new Callback<List<Like>>() {
                         @Override
-                        public void success(List<Like> likes, Response response) {
+                        public void onResponse(Call<List<Like>> call,
+                                               Response<List<Like>> response) {
                             // TODO something better than this.
                             StringBuilder sb = new StringBuilder("Liked by:\n\n");
-                            for (Like like : likes) {
+                            for (Like like : response.body()) {
                                 if (like.user != null) {
                                     sb.append("@");
                                     sb.append(like.user.username);
@@ -991,8 +1073,8 @@ public class DribbbleShot extends Activity {
                         }
 
                         @Override
-                        public void failure(RetrofitError error) {
-                            Log.e("GET COMMENT LIKES", error.getMessage(), error);
+                        public void onFailure(Call<List<Like>> call, Throwable t) {
+                            Log.e("GET COMMENT LIKES", t.getMessage(), t);
                         }
                     });
                 }

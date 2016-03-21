@@ -45,7 +45,6 @@ import android.view.ViewAnimationUtils;
 import android.view.ViewGroup;
 import android.view.ViewStub;
 import android.view.ViewTreeObserver;
-import android.view.animation.AnimationUtils;
 import android.view.inputmethod.EditorInfo;
 import android.widget.CheckBox;
 import android.widget.ImageButton;
@@ -65,6 +64,7 @@ import io.plaidapp.data.SearchDataManager;
 import io.plaidapp.data.pocket.PocketUtils;
 import io.plaidapp.ui.recyclerview.InfiniteScrollListener;
 import io.plaidapp.ui.widget.BaselineGridTextView;
+import io.plaidapp.util.AnimUtils;
 import io.plaidapp.util.ImeUtils;
 import io.plaidapp.util.ViewUtils;
 
@@ -135,8 +135,9 @@ public class SearchActivity extends Activity {
                                 .scaleY(1f)
                                 .setStartDelay(800L)
                                 .setDuration(300L)
-                                .setInterpolator(AnimationUtils.loadInterpolator(SearchActivity
-                                        .this, android.R.interpolator.linear_out_slow_in));
+                                .setInterpolator(AnimUtils.getLinearOutSlowInInterpolator
+                                        (SearchActivity
+                                        .this));
                     }
                     adapter.addAndResort(data);
                 } else {
@@ -163,7 +164,6 @@ public class SearchActivity extends Activity {
             }
         });
         results.setHasFixedSize(true);
-        results.addOnScrollListener(gridScroll);
 
         // extract the search icon's location passed from the launching activity, minus 4dp to
         // compensate for different paddings in the views
@@ -176,8 +176,7 @@ public class SearchActivity extends Activity {
         searchBackContainer.animate()
                 .translationX(0f)
                 .setDuration(650L)
-                .setInterpolator(AnimationUtils.loadInterpolator(this,
-                        android.R.interpolator.fast_out_slow_in));
+                .setInterpolator(AnimUtils.getFastOutSlowInInterpolator(this));
         // transform from search icon to back icon
         AnimatedVectorDrawable searchToBack = (AnimatedVectorDrawable) ContextCompat
                 .getDrawable(this, R.drawable.avd_search_to_back);
@@ -193,20 +192,18 @@ public class SearchActivity extends Activity {
                 searchBack.setImageDrawable(ContextCompat.getDrawable(SearchActivity.this,
                         R.drawable.ic_arrow_back_padded));
             }
-        }, 600);
+        }, 600L);
 
         // fade in the other search chrome
         searchBackground.animate()
                 .alpha(1f)
                 .setDuration(300L)
-                .setInterpolator(AnimationUtils.loadInterpolator(this,
-                        android.R.interpolator.linear_out_slow_in));
+                .setInterpolator(AnimUtils.getLinearOutSlowInInterpolator(this));
         searchView.animate()
                 .alpha(1f)
                 .setStartDelay(400L)
                 .setDuration(400L)
-                .setInterpolator(AnimationUtils.loadInterpolator(this,
-                        android.R.interpolator.linear_out_slow_in))
+                .setInterpolator(AnimUtils.getLinearOutSlowInInterpolator(this))
                 .setListener(new AnimatorListenerAdapter() {
                     @Override
                     public void onAnimationEnd(Animator animation) {
@@ -235,8 +232,8 @@ public class SearchActivity extends Activity {
                                 Color.TRANSPARENT,
                                 ContextCompat.getColor(SearchActivity.this, R.color.scrim)));
                 showScrim.setDuration(400L);
-                showScrim.setInterpolator(AnimationUtils.loadInterpolator(SearchActivity.this,
-                        android.R.interpolator.linear_out_slow_in));
+                showScrim.setInterpolator(AnimUtils.getLinearOutSlowInInterpolator(SearchActivity
+                        .this));
                 showScrim.start();
                 return false;
             }
@@ -271,14 +268,19 @@ public class SearchActivity extends Activity {
         super.onPause();
     }
 
+    @Override
+    protected void onDestroy() {
+        dataManager.cancelLoading();
+        super.onDestroy();
+    }
+
     @OnClick({ R.id.scrim, R.id.searchback })
     protected void dismiss() {
         // translate the icon to match position in the launching activity
         searchBackContainer.animate()
                 .translationX(searchBackDistanceX)
                 .setDuration(600L)
-                .setInterpolator(AnimationUtils.loadInterpolator(this,
-                        android.R.interpolator.fast_out_slow_in))
+                .setInterpolator(AnimUtils.getFastOutSlowInInterpolator(this))
                 .setListener(new AnimatorListenerAdapter() {
                     @Override
                     public void onAnimationEnd(Animator animation) {
@@ -298,24 +300,21 @@ public class SearchActivity extends Activity {
                 .alpha(0f)
                 .setStartDelay(0L)
                 .setDuration(120L)
-                .setInterpolator(AnimationUtils.loadInterpolator(this,
-                        android.R.interpolator.fast_out_linear_in))
+                .setInterpolator(AnimUtils.getFastOutLinearInInterpolator(this))
                 .setListener(null)
                 .start();
         searchBackground.animate()
                 .alpha(0f)
                 .setStartDelay(300L)
                 .setDuration(160L)
-                .setInterpolator(AnimationUtils.loadInterpolator(this,
-                        android.R.interpolator.fast_out_linear_in))
+                .setInterpolator(AnimUtils.getFastOutLinearInInterpolator(this))
                 .setListener(null)
                 .start();
         if (searchToolbar.getZ() != 0f) {
             searchToolbar.animate()
                     .z(0f)
                     .setDuration(600L)
-                    .setInterpolator(AnimationUtils.loadInterpolator(this,
-                            android.R.interpolator.fast_out_linear_in))
+                    .setInterpolator(AnimUtils.getFastOutLinearInInterpolator(this))
                     .start();
         }
 
@@ -328,8 +327,8 @@ public class SearchActivity extends Activity {
                     (float) Math.hypot(searchIconCenterX, resultsContainer.getHeight()),
                     0f);
             closeResults.setDuration(500L);
-            closeResults.setInterpolator(AnimationUtils.loadInterpolator(SearchActivity.this,
-                    android.R.interpolator.fast_out_slow_in));
+            closeResults.setInterpolator(AnimUtils.getFastOutSlowInInterpolator(SearchActivity
+                    .this));
             closeResults.addListener(new AnimatorListenerAdapter() {
                 @Override
                 public void onAnimationEnd(Animator animation) {
@@ -343,8 +342,7 @@ public class SearchActivity extends Activity {
         scrim.animate()
                 .alpha(0f)
                 .setDuration(400L)
-                .setInterpolator(AnimationUtils.loadInterpolator(this,
-                        android.R.interpolator.fast_out_linear_in))
+                .setInterpolator(AnimUtils.getFastOutLinearInInterpolator(this))
                 .setListener(null)
                 .start();
     }
@@ -369,8 +367,7 @@ public class SearchActivity extends Activity {
                         fab.getWidth() / 2,
                         confirmSaveContainer.getWidth() / 2);
                 reveal.setDuration(250L);
-                reveal.setInterpolator(AnimationUtils.loadInterpolator(SearchActivity.this,
-                        android.R.interpolator.fast_out_slow_in));
+                reveal.setInterpolator(AnimUtils.getFastOutSlowInInterpolator(SearchActivity.this));
                 reveal.start();
 
                 // show the scrim
@@ -383,16 +380,16 @@ public class SearchActivity extends Activity {
                         0,
                         (float) Math.hypot(centerX, centerY));
                 revealScrim.setDuration(400L);
-                revealScrim.setInterpolator(AnimationUtils.loadInterpolator(SearchActivity
-                        .this, android.R.interpolator.linear_out_slow_in));
+                revealScrim.setInterpolator(AnimUtils.getLinearOutSlowInInterpolator(SearchActivity
+                        .this));
                 revealScrim.start();
                 ObjectAnimator fadeInScrim = ObjectAnimator.ofArgb(resultsScrim,
                         ViewUtils.BACKGROUND_COLOR,
                         Color.TRANSPARENT,
                         ContextCompat.getColor(SearchActivity.this, R.color.scrim));
                 fadeInScrim.setDuration(800L);
-                fadeInScrim.setInterpolator(AnimationUtils.loadInterpolator(SearchActivity
-                        .this, android.R.interpolator.linear_out_slow_in));
+                fadeInScrim.setInterpolator(AnimUtils.getLinearOutSlowInInterpolator(SearchActivity
+                        .this));
                 fadeInScrim.start();
 
                 // ease in the checkboxes
@@ -402,16 +399,16 @@ public class SearchActivity extends Activity {
                         .alpha(1f)
                         .translationY(0f)
                         .setDuration(200L)
-                        .setInterpolator(AnimationUtils.loadInterpolator(SearchActivity.this,
-                                android.R.interpolator.linear_out_slow_in));
+                        .setInterpolator(AnimUtils.getLinearOutSlowInInterpolator(SearchActivity
+                                .this));
                 saveDesignerNews.setAlpha(0.6f);
                 saveDesignerNews.setTranslationY(saveDesignerNews.getHeight() * 0.5f);
                 saveDesignerNews.animate()
                         .alpha(1f)
                         .translationY(0f)
                         .setDuration(200L)
-                        .setInterpolator(AnimationUtils.loadInterpolator(SearchActivity.this,
-                                android.R.interpolator.linear_out_slow_in));
+                        .setInterpolator(AnimUtils.getLinearOutSlowInInterpolator(SearchActivity
+                                .this));
                 return false;
             }
         });
@@ -442,8 +439,8 @@ public class SearchActivity extends Activity {
                             ViewUtils.BACKGROUND_COLOR,
                             Color.TRANSPARENT));
             hideConfirmation.setDuration(150L);
-            hideConfirmation.setInterpolator(AnimationUtils.loadInterpolator(SearchActivity.this,
-                    android.R.interpolator.fast_out_slow_in));
+            hideConfirmation.setInterpolator(AnimUtils.getFastOutSlowInInterpolator
+                    (SearchActivity.this));
             hideConfirmation.addListener(new AnimatorListenerAdapter() {
                 @Override
                 public void onAnimationEnd(Animator animation) {
@@ -536,27 +533,4 @@ public class SearchActivity extends Activity {
         searchView.clearFocus();
         dataManager.searchFor(query);
     }
-
-    private int gridScrollY = 0;
-    private RecyclerView.OnScrollListener gridScroll = new RecyclerView.OnScrollListener() {
-        @Override
-        public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
-            gridScrollY += dy;
-            if (gridScrollY > 0 && searchToolbar.getTranslationZ() != appBarElevation) {
-                searchToolbar.animate()
-                        .translationZ(appBarElevation)
-                        .setDuration(300L)
-                        .setInterpolator(AnimationUtils.loadInterpolator(SearchActivity.this,
-                                android.R.interpolator.fast_out_slow_in))
-                        .start();
-            } else if (gridScrollY == 0 && searchToolbar.getTranslationZ() != 0) {
-                searchToolbar.animate()
-                        .translationZ(0f)
-                        .setDuration(300L)
-                        .setInterpolator(AnimationUtils.loadInterpolator(SearchActivity.this,
-                                android.R.interpolator.fast_out_slow_in))
-                        .start();
-            }
-        }
-    };
 }

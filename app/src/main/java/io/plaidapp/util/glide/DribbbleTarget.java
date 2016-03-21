@@ -25,7 +25,6 @@ import com.bumptech.glide.load.resource.drawable.GlideDrawable;
 import com.bumptech.glide.load.resource.gif.GifDrawable;
 import com.bumptech.glide.request.animation.GlideAnimation;
 import com.bumptech.glide.request.target.GlideDrawableImageViewTarget;
-import com.bumptech.glide.request.target.SizeReadyCallback;
 
 import io.plaidapp.R;
 import io.plaidapp.ui.widget.BadgedFourThreeImageView;
@@ -39,18 +38,18 @@ import io.plaidapp.util.ViewUtils;
 public class DribbbleTarget extends GlideDrawableImageViewTarget implements
         Palette.PaletteAsyncListener {
 
-    private final boolean playGifs;
+    private final boolean autoplayGifs;
 
-    public DribbbleTarget(BadgedFourThreeImageView view, boolean playGifs) {
+    public DribbbleTarget(BadgedFourThreeImageView view, boolean autoplayGifs) {
         super(view);
-        this.playGifs = playGifs;
+        this.autoplayGifs = autoplayGifs;
     }
 
     @Override
     public void onResourceReady(GlideDrawable resource, GlideAnimation<? super GlideDrawable>
             animation) {
         super.onResourceReady(resource, animation);
-        if (!playGifs) {
+        if (!autoplayGifs) {
             resource.stop();
         }
 
@@ -59,11 +58,9 @@ public class DribbbleTarget extends GlideDrawableImageViewTarget implements
             Palette.from(((GlideBitmapDrawable) resource).getBitmap())
                     .clearFilters()
                     .generate(this);
-            badgedImageView.showBadge(false);
         } else if (resource instanceof GifDrawable) {
             Bitmap image = ((GifDrawable) resource).getFirstFrame();
             Palette.from(image).clearFilters().generate(this);
-            badgedImageView.showBadge(true);
 
             // look at the corner to determine the gif badge color
             int cornerSize = (int) (56 * getView().getContext().getResources().getDisplayMetrics
@@ -81,14 +78,14 @@ public class DribbbleTarget extends GlideDrawableImageViewTarget implements
 
     @Override
     public void onStart() {
-        if (playGifs) {
+        if (autoplayGifs) {
             super.onStart();
         }
     }
 
     @Override
     public void onStop() {
-        if (playGifs) {
+        if (autoplayGifs) {
             super.onStop();
         }
     }
